@@ -404,6 +404,7 @@ module crystal
     crystal_slip_direction, &
     crystal_slip_transverse, &
     crystal_labels_slip, &
+    crystal_CorrespondenceMatrix_twin, &
     crystal_labels_twin
 
 contains
@@ -2111,6 +2112,60 @@ function getlabels(active,potential,system) result(labels)
 
 end function getlabels
 
+!--------------------------------------------------------------------------------------------------
+!> @brief correspondence matrix for twinning
+!> details only active twin systems are considered
+!--------------------------------------------------------------------------------------------------
+function crystal_CorrespondenceMatrix_twin(Ntwin,lattice,cOverA) result(CorrespondenceMatrix)
+
+  integer,    dimension(:),            intent(in) :: Ntwin                                     !< number of active twin systems per family
+  character(len=*),                          intent(in) :: lattice                                 !< lattice structure
+  real(pReal),                               intent(in) :: cOverA                                    !< c/a ratio
+  real(pReal),     dimension(3,3,sum(Ntwin))            :: CorrespondenceMatrix
+
+  real(pReal),     dimension(3,3,sum(Ntwin))            :: coordinateSystem
+  real(pReal),     dimension(sum(Ntwin))                :: characteristicShearTwin
+  real(pReal),     dimension(3,3,sum(Ntwin))            :: SchmidMatrixTwin
+  real(pReal),     dimension(:,:), allocatable          :: twinSystems
+  integer,   dimension(:),   allocatable          :: NtwinMax
+  integer :: i
+
+  select case(lattice)
+    case('cF')
+      NtwinMax    = CF_NTWINSYSTEM
+      twinSystems = CF_SYSTEMTWIN
+    case('cI')
+      NtwinMax    = CI_NTWINSYSTEM
+      twinSystems = CI_SYSTEMTWIN
+    case('hP')
+      NtwinMax    = HP_NTWINSYSTEM
+      twinSystems = HP_SYSTEMTWIN                                                              !< the twin system matrix is different from V2.0
+    case default
+      allocate(NtwinMax(0))
+      call IO_error(137,ext_msg='crystal_CorrespondenceMatrix_twin: '//trim(lattice))
+  end select
+
+  if (any(NtwinMax(1:size(Ntwin)) - Ntwin < 0)) &
+    call IO_error(145,ext_msg='Ntwin '//trim(lattice))
+  if (any(Ntwin < 0)) &
+    call IO_error(144,ext_msg='Ntwin '//trim(lattice))
+
+  coordinateSystem        =  buildCoordinateSystem(Ntwin,NtwinMax,twinSystems,lattice,cOverA)
+  !  characteristicShearTwin =  0.0_pReal*lattice_characteristicShear_Twin(Ntwin,lattice,cOverA)          ! for removing shear from CorrespondenceMatrix
+  characteristicShearTwin =  crystal_characteristicShear_Twin(Ntwin,lattice,cOverA)
+  SchmidMatrixTwin        =  crystal_SchmidMatrix_twin(Ntwin,lattice,cOverA)
+
+  !write(6,*)'coordinate system', coordinateSystem(1:3,2,1)
+  
+  !CorrespondenceMatrix(1:3,1:3,1) = math_axisAngleToR(coordinateSystem(1:3,2,6), 180.0_pReal*INRAD)                           ! delete this
+
+  do i = 1, sum(Ntwin)
+    CorrespondenceMatrix(1:3,1:3,i) = matmul(math_axisAngleToR(coordinateSystem(1:3,2,i), &
+                                      180.0_pReal*INRAD), MATH_I3 + characteristicShearTwin(i)* &
+                                      SchmidMatrixTwin(1:3,1:3,i))
+  enddo
+
+end function crystal_CorrespondenceMatrix_twin
 
 !--------------------------------------------------------------------------------------------------
 !> @brief Equivalent Poisson's ratio (ν)
@@ -2306,5 +2361,8 @@ subroutine crystal_selfTest()
     error stop 'isotropic_nu/isostress/cF-tI'
 
 end subroutine crystal_selfTest
+
+
+
 
 end module crystal

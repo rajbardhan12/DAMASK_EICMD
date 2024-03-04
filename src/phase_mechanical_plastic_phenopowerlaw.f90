@@ -32,7 +32,8 @@ submodule(phase:plastic) phenopowerlaw
       P_sl, &
       P_tw, &
       P_nS_pos, &
-      P_nS_neg
+      P_nS_neg, &
+      CorrespondenceMatrix
     integer :: &
       sum_N_sl, &                                                                                   !< total number of active slip system
       sum_N_tw                                                                                      !< total number of active twin systems
@@ -203,12 +204,13 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
       prm%c_4            = math_expand(pl%get_as1dReal('c_4',            requiredSize=size(N_tw), &
                                                                          defaultVal=misc_zeros(size(N_tw))), N_tw)
 
+      prm%CorrespondenceMatrix = crystal_CorrespondenceMatrix_twin(N_tw,phase_lattice(ph),phase_cOverA(ph))
       prm%gamma_char = crystal_characteristicShear_twin(N_tw,phase_lattice(ph),phase_cOverA(ph))
       prm%h_tw_tw    = crystal_interaction_TwinByTwin(N_tw,pl%get_as1dReal('h_tw-tw'),phase_lattice(ph))
 
       prm%P_tw       = crystal_SchmidMatrix_twin(N_tw,phase_lattice(ph),phase_cOverA(ph))
       prm%systems_tw = crystal_labels_twin(N_tw,phase_lattice(ph))
-
+      
       ! sanity checks
       if (any(prm%dot_gamma_0_tw <= 0.0_pREAL))   extmsg = trim(extmsg)//' dot_gamma_0_tw'
       if (any(prm%n_tw           <= 0.0_pREAL))   extmsg = trim(extmsg)//' n_tw'
@@ -225,6 +227,7 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
                prm%h_0_tw_tw, &
                source=emptyRealArray)
       allocate(prm%h_tw_tw(0,0))
+      allocate(prm%CorrespondenceMatrix(0,0,0))
     end if twinActive
 
 !--------------------------------------------------------------------------------------------------
@@ -511,7 +514,7 @@ pure subroutine kinetics_tw(Mp,ph,en,&
 
   associate(prm => param(ph), stt => state(ph))
 
-    tau_tw = [(math_tensordot(Mp,prm%P_tw(1:3,1:3,i)),i=1,prm%sum_N_tw)]
+    tau_tw = [(math_tensordot(Mp,prm%CorrespondenceMatrix(1:3,1:3,i)),i=1,prm%sum_N_tw)]
 
     where(tau_tw > 0.0_pREAL)
       dot_gamma_tw = (1.0_pREAL-sum(stt%gamma_tw(:,en)/prm%gamma_char)) &                           ! only twin in untwinned volume fraction
