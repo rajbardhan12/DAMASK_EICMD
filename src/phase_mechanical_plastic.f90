@@ -209,6 +209,22 @@ submodule(phase:mechanical) plastic
         type(tRotationContainer), dimension(:), intent(in) :: orientation
     end subroutine plastic_nonlocal_updateCompatibility
 
+    module subroutine plastic_phenopowerlaw_deltaState(ph,en)                          !< Achal
+      integer, intent(in)::&
+        ph, &
+        en
+    end subroutine plastic_phenopowerlaw_deltaState
+
+    module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)             !< Achal
+      integer, intent(in) :: &
+        ph, &
+        en
+      logical ,                     intent(out) :: &
+        twinJump
+      real(pREAL), dimension(3,3),  intent(out) :: &
+        deltaFp
+    end subroutine plastic_kinematic_deltaFp
+
   end interface
 
 contains
@@ -405,6 +421,9 @@ module function plastic_deltaState(ph, en) result(status)
         case (MECHANICAL_PLASTICITY_NONLOCAL) plasticType
           call plastic_nonlocal_deltaState(Mp,ph,en)
 
+        case (MECHANICAL_PLASTICITY_PHENOPOWERLAW) plasticType
+          call plastic_phenopowerlaw_deltaState(ph,en)
+
       end select plasticType
 
       if (any(IEEE_is_NaN(plasticState(ph)%deltaState(:,en)))) status = STATUS_FAIL_PHASE_MECHANICAL_DELTASTATE
@@ -444,5 +463,32 @@ function plastic_active(plastic_label) result(active_plastic)
   end do
 
 end function plastic_active
+
+!--------------------------------------------------------------------------------------------------
+!> @brief for constitutive models having an instantaneous change of kinematic (such as Fp, Fe or Fi)
+!>  this subroutine will return following
+!1) DeltaKinematic which is deltaFp here = Cij  (correspondance matrix) representing twinning shear and reorientation
+!2) -(twin volume fraction) for each twin system to make it harder for twinned material point to twin again by any twin system
+!3) -(last sampled volume fraction) to restart sampling
+!4) logical true if twinning possible/needed, false if not occurring/not needed
+!--------------------------------------------------------------------------------------------------
+subroutine plastic_KinematicJump(ph, en, Jump_occurr,deltaFp)
+
+  integer, intent(in) :: &
+    ph, &
+    en
+  logical ,                     intent(out) :: &
+    Jump_occurr
+  real(pReal), dimension(3,3),  intent(out) :: &
+    deltaFp
+  
+  plasticType: select case (mechanical_plasticity_type(ph))
+
+    case (MECHANICAL_PLASTICITY_PHENOPOWERLAW) plasticType
+      call plastic_kinematic_deltaFp(ph,en, Jump_occurr,deltaFp)
+
+  end select plasticType
+
+end subroutine plastic_KinematicJump
 
 end submodule plastic

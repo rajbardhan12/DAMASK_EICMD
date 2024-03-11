@@ -22,7 +22,8 @@ submodule(phase:plastic) phenopowerlaw
       h_0_sl_sl, &                                                                                  !< reference hardening slip - slip
       h_0_tw_sl, &                                                                                  !< reference hardening twin - slip
       h_0_tw_tw, &                                                                                  !< reference hardening twin - twin
-      gamma_char                                                                                    !< characteristic shear for twins
+      gamma_char, &                                                                                    !< characteristic shear for twins
+      checkstep
     real(pREAL),               allocatable, dimension(:,:) :: &
       h_sl_sl, &                                                                                    !< slip resistance from slip activity
       h_sl_tw, &                                                                                    !< slip resistance from twin activity
@@ -49,7 +50,8 @@ submodule(phase:plastic) phenopowerlaw
       xi_sl, &
       xi_tw, &
       gamma_sl, &
-      gamma_tw
+      gamma_tw, &
+      f_twin
   end type tIndexDotState
 
   type :: tPhenopowerlawState
@@ -57,14 +59,19 @@ submodule(phase:plastic) phenopowerlaw
       xi_sl, &
       xi_tw, &
       gamma_sl, &
-      gamma_tw
+      gamma_tw, &
+      f_twin, &
+      fmc_twin
+    real(pREAL), pointer, dimension(:) :: &
+      variant_twin, &
+      frozen
   end type tPhenopowerlawState
 
 !--------------------------------------------------------------------------------------------------
 ! containers for parameters, dot state index,  and state
   type(tParameters),         allocatable, dimension(:) :: param
   type(tIndexDotState),      allocatable, dimension(:) :: indexDotState
-  type(tPhenopowerlawState), allocatable, dimension(:) :: state
+  type(tPhenopowerlawState), allocatable, dimension(:) :: state, deltastate                !Achal added deltastate
 
 contains
 
@@ -77,9 +84,9 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
 
   logical, dimension(:), allocatable :: myPlasticity
   integer :: &
-    ph, i, &
+    ph, i, o, &
     Nmembers, &
-    sizeState, sizeDotState, &
+    sizeState, sizeDotState, sizeDeltaState, &
     startIndex, endIndex
   integer,     dimension(:), allocatable :: &
     N_sl, &                                                                                         !< number of slip-systems for a given slip family
@@ -110,12 +117,13 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
   allocate(param(phases%length))
   allocate(indexDotState(phases%length))
   allocate(state(phases%length))
+  allocate(deltastate(phases%length))
   extmsg = ''
 
   do ph = 1, phases%length
     if (.not. myPlasticity(ph)) cycle
 
-    associate(prm => param(ph), stt => state(ph), &
+    associate(prm => param(ph), stt => state(ph), dlt => deltastate(ph), &
               idx_dot => indexDotState(ph))
 
     phase => phases%get_dict(ph)
@@ -203,6 +211,8 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
                                                                          defaultVal=misc_ones(size(N_tw))), N_tw)
       prm%c_4            = math_expand(pl%get_as1dReal('c_4',            requiredSize=size(N_tw), &
                                                                          defaultVal=misc_zeros(size(N_tw))), N_tw)
+      prm%checkstep      = math_expand(pl%get_as1dReal('checkstep',      requiredSize=size(N_tw), &
+                                                                         defaultVal=0.05_pREAL*misc_ones(size(N_tw))), N_tw)
 
       prm%CorrespondenceMatrix = crystal_CorrespondenceMatrix_twin(N_tw,phase_lattice(ph),phase_cOverA(ph))
       prm%gamma_char = crystal_characteristicShear_twin(N_tw,phase_lattice(ph),phase_cOverA(ph))
@@ -225,9 +235,10 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
                prm%gamma_char, &
                prm%h_0_tw_sl, &
                prm%h_0_tw_tw, &
+               prm%checkstep, &
                source=emptyRealArray)
       allocate(prm%h_tw_tw(0,0))
-      allocate(prm%CorrespondenceMatrix(0,0,0))
+      !allocate(prm%CorrespondenceMatrix(0,0,0))                              !Achal: this needed or not?
     end if twinActive
 
 !--------------------------------------------------------------------------------------------------
@@ -246,10 +257,18 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
 ! allocate state arrays
     Nmembers = count(material_ID_phase == ph)
     sizeDotState = size(['xi_sl   ','gamma_sl']) * prm%sum_N_sl &
-                 + size(['xi_tw   ','gamma_tw']) * prm%sum_N_tw
-    sizeState = sizeDotState
+                 + size(['xi_tw   ','gamma_tw']) * prm%sum_N_tw &
+                 + size(['f_twin  ']) * prm%sum_N_tw                                       !Achal
 
-    call phase_allocateState(plasticState(ph),Nmembers,sizeState,sizeDotState,0)
+    sizeDeltaState = size(['f_twin  ','fmc_twin']) * prm%sum_N_tw &                       !Achal
+                    + size(['variant_twin','frozen      '])
+    
+    sizeState = size(['xi_sl   ','gamma_sl']) * prm%sum_N_sl &
+                + size(['xi_tw   ','gamma_tw']) * prm%sum_N_tw &
+                + size(['f_twin  ','fmc_twin']) * prm%sum_N_tw &                                      !Achal
+                + size(['variant_twin','frozen      '])
+
+    call phase_allocateState(plasticState(ph),Nmembers,sizeState,sizeDotState,sizeDeltaState)
     deallocate(plasticState(ph)%dotState) ! ToDo: remove dotState completely
 
 !--------------------------------------------------------------------------------------------------
@@ -281,6 +300,34 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
     idx_dot%gamma_tw = [startIndex,endIndex]
     stt%gamma_tw => plasticState(ph)%state(startIndex:endIndex,:)
     plasticState(ph)%atol(startIndex:endIndex) = pl%get_asReal('atol_gamma',defaultVal=1.0e-6_pREAL)
+
+    o = plasticState(ph)%offsetDeltaState
+    startIndex = endIndex + 1                                                      ! Achal
+    endIndex   = endIndex + prm%sum_N_tw                                           ! Achal
+    idx_dot%f_twin = [startIndex,endIndex]                                         ! Achal
+    stt%f_twin => plasticState(ph)%state(startIndex:endIndex,:)                     ! Achal
+    dlt%f_twin => plasticState(ph)%deltaState(startIndex-o:endIndex-o,:)         ! Achal
+    plasticState(ph)%atol(startIndex:endIndex) = pl%get_asReal('atol_gamma',defaultVal=1.0e-6_pReal)
+
+    startIndex =  endIndex + 1
+    endIndex   =  endIndex + 1
+    stt%frozen => plasticState(ph)%state(startIndex,:)
+    stt%frozen = 0.0_pReal-1.0_pReal 
+    dlt%frozen => plasticState(ph)%deltaState(startIndex-o,:)
+    plasticState(ph)%atol(startIndex:endIndex) = pl%get_asReal('atol_gamma',defaultVal=1.0e-6_pReal)
+  
+    startIndex =  endIndex + 1
+    endIndex   =  endIndex + prm%sum_N_tw
+    stt%fmc_twin => plasticState(ph)%state(startIndex:endIndex,:)
+    dlt%fmc_twin => plasticState(ph)%deltaState(startIndex-o:endIndex-o,:)      
+    plasticState(ph)%atol(startIndex:endIndex) = pl%get_asReal('atol_gamma',defaultVal=1.0e-6_pReal)
+  
+    startIndex       =  endIndex + 1
+    endIndex         =  endIndex + 1
+    stt%variant_twin => plasticState(ph)%state(startIndex,:)
+    stt%variant_twin = 0.0_pReal
+    dlt%variant_twin => plasticState(ph)%deltaState(startIndex-o,:)      
+    plasticState(ph)%atol(startIndex:endIndex) = 0.0_pReal
 
     end associate
 
@@ -318,7 +365,7 @@ pure module subroutine phenopowerlaw_LpAndItsTangent(Lp,dLp_dMp,Mp,ph,en)
   real(pREAL), dimension(3,3,param(ph)%sum_N_sl) :: &
     P_nS
   real(pREAL), dimension(param(ph)%sum_N_tw) :: &
-    dot_gamma_tw,ddot_gamma_dtau_tw
+    dot_gamma_tw,fdot_twin, ddot_gamma_dtau_tw
 
 
   Lp = 0.0_pREAL
@@ -335,7 +382,7 @@ pure module subroutine phenopowerlaw_LpAndItsTangent(Lp,dLp_dMp,Mp,ph,en)
                          + ddot_gamma_dtau_sl(i) * prm%P_sl(k,l,i) * P_nS(m,n,i)
     end do slipSystems
 
-    call kinetics_tw(Mp,ph,en,dot_gamma_tw,ddot_gamma_dtau_tw)
+    call kinetics_tw(Mp,ph,en,dot_gamma_tw,fdot_twin, ddot_gamma_dtau_tw)
     twinSystems: do i = 1, prm%sum_N_tw
       Lp = Lp + dot_gamma_tw(i)*prm%P_tw(1:3,1:3,i)
       forall (k=1:3,l=1:3,m=1:3,n=1:3) &
@@ -372,10 +419,11 @@ module function phenopowerlaw_dotState(Mp,ph,en) result(dotState)
             dot_xi_sl => dotState(indexDotState(ph)%xi_sl(1):indexDotState(ph)%xi_sl(2)), &
             dot_xi_tw => dotState(indexDotState(ph)%xi_tw(1):indexDotState(ph)%xi_tw(2)), &
             dot_gamma_sl => dotState(indexDotState(ph)%gamma_sl(1):indexDotState(ph)%gamma_sl(2)), &
-            dot_gamma_tw => dotState(indexDotState(ph)%gamma_tw(1):indexDotState(ph)%gamma_tw(2)))
+            dot_gamma_tw => dotState(indexDotState(ph)%gamma_tw(1):indexDotState(ph)%gamma_tw(2)), &
+            fdot_twin => dotstate(indexDotState(ph)%f_twin(1):indexDotState(ph)%f_twin(2)))
 
     call kinetics_sl(Mp,ph,en, dot_gamma_sl)
-    call kinetics_tw(Mp,ph,en, dot_gamma_tw)
+    call kinetics_tw(Mp,ph,en, dot_gamma_tw, fdot_twin)
     dot_gamma_sl = abs(dot_gamma_sl)
     sumF = sum(stt%gamma_tw(:,en)/prm%gamma_char)
 
@@ -396,6 +444,89 @@ module function phenopowerlaw_dotState(Mp,ph,en) result(dotState)
 
 end function phenopowerlaw_dotState
 
+
+!--------------------------------------------------------------------------------------------------
+!> @brief calculates instantaneous incremental change of kinematics and associated jump state
+!> Satya, Achal
+!--------------------------------------------------------------------------------------------------
+module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
+
+  integer,                     intent(in)  :: &
+    ph, &
+    en
+  logical,                     intent(out) :: &
+    twinJump
+  real(pREAL), dimension(3,3), intent(out) :: &
+    deltaFp
+    
+  integer :: &
+    n, &                                                                                            ! neighbor index
+    neighbor_e, &                                                                                   ! element index of my neighbor
+    neighbor_i, &                                                                                   ! integration point index of my neighbor
+    neighbor_me, &
+    neighbor_phase
+
+  real(pREAL) :: &
+    random, &
+    nRealNeighbors
+  integer :: &
+    twin_var
+  real(pREAL), dimension(param(ph)%sum_N_tw)  :: &
+    fdot_twin
+  real(pREAL), dimension(param(ph)%sum_N_tw)  :: &
+    tau_tw
+  integer :: i
+  twinJump = .false.
+  deltaFp = math_I3
+
+  associate(prm => param(ph), stt => state(ph), dlt => deltastate(ph))
+
+    twin_var = maxloc(stt%f_twin(:,en),dim=1)
+
+    call random_number(random)
+
+    Ability_Nucleation: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then
+      stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
+
+      Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then          ! Instead of sum take max
+        twinJump = .true.
+        deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
+        dlt%f_twin(:,en)     = 0.0_pReal - stt%f_twin(:,en)
+        dlt%fmc_twin(:,en)   = 0.0_pReal - stt%fmc_twin(:,en)
+        dlt%frozen(en)       = 1.0_pReal - stt%frozen(en)
+        dlt%variant_twin(en) = twin_var !- stt%variant_twin(en)                ! Achal LHS is real, RHS integer   ! why this equation?
+
+      endif Success_Nucleation
+
+    endif Ability_Nucleation
+
+  end associate
+
+end subroutine plastic_kinematic_deltaFp
+
+!--------------------------------------------------------------------------------------------------
+!> @brief calculates (instantaneous) incremental change of microstructure
+!> Satya, Achal
+!--------------------------------------------------------------------------------------------------
+module subroutine plastic_phenopowerlaw_deltaState(ph,en)
+  implicit none
+  
+  integer, intent(in)::&
+    ph, &
+    en
+  
+  ! These are updated at every strain increment. What should these initilizations be?
+  
+  associate(dlt => deltastate(ph))
+  
+    dlt%f_twin(:,en)   = 0.0_pReal
+    dlt%fmc_twin(:,en) = 0.0_pReal
+    !dlt%variant_twin(en) = 0.0_pReal                                  
+    !dlt%frozen(en) = 0.0_pReal
+  
+  end associate
+  
+  end subroutine plastic_phenopowerlaw_deltaState
 
 !--------------------------------------------------------------------------------------------------
 !> @brief Write results to HDF5 output file.
@@ -494,7 +625,7 @@ end subroutine kinetics_sl
 ! at the end since some of them are optional.
 !--------------------------------------------------------------------------------------------------
 pure subroutine kinetics_tw(Mp,ph,en,&
-                            dot_gamma_tw,ddot_gamma_dtau_tw)
+                            dot_gamma_tw, fdot_twin, ddot_gamma_dtau_tw)
 
   real(pREAL), dimension(3,3),  intent(in) :: &
     Mp                                                                                              !< Mandel stress
@@ -503,7 +634,7 @@ pure subroutine kinetics_tw(Mp,ph,en,&
     en
 
   real(pREAL), dimension(param(ph)%sum_N_tw), intent(out) :: &
-    dot_gamma_tw
+    dot_gamma_tw, fdot_twin
   real(pREAL), dimension(param(ph)%sum_N_tw), intent(out), optional :: &
     ddot_gamma_dtau_tw
 
@@ -514,13 +645,15 @@ pure subroutine kinetics_tw(Mp,ph,en,&
 
   associate(prm => param(ph), stt => state(ph))
 
-    tau_tw = [(math_tensordot(Mp,prm%CorrespondenceMatrix(1:3,1:3,i)),i=1,prm%sum_N_tw)]
+    tau_tw = [(math_tensordot(Mp,prm%P_tw(1:3,1:3,i)),i=1,prm%sum_N_tw)]
 
-    where(tau_tw > 0.0_pREAL)
+    where(tau_tw > 0.0_pREAL .and. stt%frozen(en) < 0.9_pReal)                                      ! Achal
       dot_gamma_tw = (1.0_pREAL-sum(stt%gamma_tw(:,en)/prm%gamma_char)) &                           ! only twin in untwinned volume fraction
                    * prm%dot_gamma_0_tw*(tau_tw/stt%xi_tw(:,en))**prm%n_tw
+      fdot_twin = (0.05_pReal*(abs(tau_tw)/stt%xi_tw(:,en))**prm%n_tw)/prm%gamma_char               ! Achal 0.05 is a constant
     else where
       dot_gamma_tw = 0.0_pREAL
+      fdot_twin = 0.0_pREAL
     end where
 
     if (present(ddot_gamma_dtau_tw)) then
