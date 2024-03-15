@@ -110,6 +110,15 @@ submodule(phase) mechanical
         dLp_dFi                                                                                         !< derivative of Lp with respect to Fi
     end subroutine plastic_LpAndItsTangents
 
+    module subroutine plastic_KinematicJump(ph, en, Jump_occurr,deltaFp)
+      integer, intent(in) :: &
+        ph, &
+        en
+      logical ,                     intent(out) :: &
+        Jump_occurr
+      real(pReal), dimension(3,3),  intent(out) :: &
+        deltaFp
+    end subroutine plastic_KinematicJump
 
     module subroutine plastic_isotropic_result(ph,group)
       integer,          intent(in) :: ph
@@ -376,6 +385,13 @@ end subroutine mechanical_result
 !--------------------------------------------------------------------------------------------------
 !> @brief calculation of stress (P) with time integration based on a residuum in Lp and
 !> intermediate acceleration of the Newton-Raphson correction
+!> @modified by Satya and Achal
+!> check for detour i.e. if twinning is possible (we are not going ahead in Lp loop consistency) 
+!> checking by calling the deltaFp subroutine that should return 4 things
+!1) deltaFp= Cij (correspondance matrix) representing twinning shear and reorientation
+!2) -(twin volume fraction) for each twin system to make it harder for twinned material point to twin again by any twin system
+!3) jump in the last sampled volume fraction
+!4) logical true if twinning possible false if not occurring
 !--------------------------------------------------------------------------------------------------
 function integrateStress(F,Fp0,Fi0,Delta_t,ph,en) result(status)
 
@@ -989,6 +1005,7 @@ end subroutine mechanical_forward
 
 !--------------------------------------------------------------------------------------------------
 !> @brief calculate stress (P)
+!> @modified by Satya and Achal
 !--------------------------------------------------------------------------------------------------
 module function phase_mechanical_constitutive(Delta_t,co,ce) result(status)
 
@@ -1001,8 +1018,8 @@ module function phase_mechanical_constitutive(Delta_t,co,ce) result(status)
   real(pREAL) :: &
     formerStep
   integer :: &
-    ph, en, sizeDotState
-  logical :: todo
+    ph, en, sizeDotState, o, sd
+  logical :: todo, FpJumped
   real(pREAL) :: stepFrac,step
   real(pREAL), dimension(3,3) :: &
     Fp0, &
@@ -1010,7 +1027,8 @@ module function phase_mechanical_constitutive(Delta_t,co,ce) result(status)
     Lp0, &
     Li0, &
     F0, &
-    F
+    F, &
+    deltaFp
   real(pREAL), dimension(plasticState(material_ID_phase(co,ce))%sizeState) :: state0
 
 
@@ -1030,6 +1048,28 @@ module function phase_mechanical_constitutive(Delta_t,co,ce) result(status)
 
   todo = .true.
   cutbackLooping: do while (todo)
+
+  ! achal calling Kinematic DeltaFp here
+  !** Starting to implement changes for accommodating large shear and reorientation caused by twinning**
+  !if(.not. FpJumped .and. NiterationStressLp>1) then                !Achal: Reason for this if statement?
+    call plastic_KinematicJump(ph, en, FpJumped,deltaFp)
+    !if(FpJumped) write(6,*) 'element jumped', en 
+    !if(FpJumped) then
+      !Fp0 = matmul(deltaFp,phase_mechanical_Fp0(ph)%data(1:3,1:3,en))
+      
+      o = plasticState(ph)%offsetDeltaState
+      sd = plasticState(ph)%sizeDeltaState
+      
+      !update current state by jump
+      !plasticState(ph)%state(o+1:o+sd,en) = plasticState(ph)%state(o+1:o+sd,en) & 
+                                             !+ plasticState(ph)%deltaState(o+1:o+sd,en)
+      
+      !store jumped state as initial value for next iteration
+      !plasticState(ph)%state0(o+1:o+sd,en) = plasticState(ph)%state(o+1:o+sd,en)
+
+      !store jumped state as initial value for for substate, partitioned state as well
+
+    !endif
 
     if (status == STATUS_OK) then
       formerStep = step

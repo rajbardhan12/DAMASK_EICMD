@@ -407,7 +407,8 @@ module function plastic_deltaState(ph, en) result(status)
   status = STATUS_OK
 
   select case (mechanical_plasticity_type(ph))
-    case (MECHANICAL_PLASTICITY_NONLOCAL,MECHANICAL_PLASTICITY_KINEHARDENING)
+    case (MECHANICAL_PLASTICITY_PHENOPOWERLAW, MECHANICAL_PLASTICITY_NONLOCAL,& 
+            MECHANICAL_PLASTICITY_KINEHARDENING)
 
       Mp = matmul(matmul(transpose(phase_mechanical_Fi(ph)%data(1:3,1:3,en)),&
                          phase_mechanical_Fi(ph)%data(1:3,1:3,en)),&

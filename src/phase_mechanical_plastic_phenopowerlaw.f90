@@ -312,7 +312,7 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
     startIndex =  endIndex + 1
     endIndex   =  endIndex + 1
     stt%frozen => plasticState(ph)%state(startIndex,:)
-    stt%frozen = 0.0_pReal-1.0_pReal 
+    !stt%frozen = 0.0_pReal-1.0_pReal 
     dlt%frozen => plasticState(ph)%deltaState(startIndex-o,:)
     plasticState(ph)%atol(startIndex:endIndex) = pl%get_asReal('atol_gamma',defaultVal=1.0e-6_pReal)
   
@@ -424,6 +424,7 @@ module function phenopowerlaw_dotState(Mp,ph,en) result(dotState)
 
     call kinetics_sl(Mp,ph,en, dot_gamma_sl)
     call kinetics_tw(Mp,ph,en, dot_gamma_tw, fdot_twin)
+    
     dot_gamma_sl = abs(dot_gamma_sl)
     sumF = sum(stt%gamma_tw(:,en)/prm%gamma_char)
 
@@ -444,6 +445,48 @@ module function phenopowerlaw_dotState(Mp,ph,en) result(dotState)
 
 end function phenopowerlaw_dotState
 
+!--------------------------------------------------------------------------------------------------
+!> @brief calculates (instantaneous) incremental change of microstructure
+!> Satya, Achal
+!--------------------------------------------------------------------------------------------------
+module subroutine plastic_phenopowerlaw_deltaState(ph,en)
+  implicit none
+  
+  integer, intent(in)::&
+    ph, &
+    en
+
+  logical :: &
+    twinJump
+
+  integer :: &
+    twin_var
+
+  real(pREAL), dimension(3,3) :: &
+    deltaFp
+  
+  ! These are updated at every strain increment. What should these initilizations be?
+  
+  associate(prm => param(ph), stt => state(ph), dlt => deltastate(ph))
+
+    twin_var = maxloc(stt%f_twin(:,en),dim=1)
+
+    !write(6,*)'twin_var',twin_var
+
+    call plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
+      !write(6,*)'twinJump',twinJump
+      if(twinJump) then
+        !write(6,*)'el',en
+        dlt%f_twin(:,en)     = 0.0_pReal - stt%f_twin(:,en)
+        dlt%fmc_twin(:,en)   = 0.0_pReal - stt%fmc_twin(:,en)
+        dlt%frozen(en)       = 1.0_pReal - stt%frozen(en)
+        write(6,*)'frozen',en,dlt%frozen(en),stt%frozen(en)
+        dlt%variant_twin(en) = twin_var !- stt%variant_twin(en)
+      endif
+  
+  end associate
+  
+  end subroutine plastic_phenopowerlaw_deltaState
 
 !--------------------------------------------------------------------------------------------------
 !> @brief calculates instantaneous incremental change of kinematics and associated jump state
@@ -487,14 +530,16 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
 
     Ability_Nucleation: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then
       stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
-
       Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then          ! Instead of sum take max
+        write(6,*)'element twinned',en,'random',random,'variant',twin_var,'volume fraction', stt%f_twin(twin_var,en)
         twinJump = .true.
         deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
-        dlt%f_twin(:,en)     = 0.0_pReal - stt%f_twin(:,en)
-        dlt%fmc_twin(:,en)   = 0.0_pReal - stt%fmc_twin(:,en)
-        dlt%frozen(en)       = 1.0_pReal - stt%frozen(en)
-        dlt%variant_twin(en) = twin_var !- stt%variant_twin(en)                ! Achal LHS is real, RHS integer   ! why this equation?
+        !write(6,*) twinJump
+        !dlt%f_twin(:,en)     = 0.0_pReal - stt%f_twin(:,en)
+        !dlt%fmc_twin(:,en)   = 0.0_pReal - stt%fmc_twin(:,en)
+        !dlt%frozen(en)       = 1.0_pReal - stt%frozen(en)
+        !write(6,*)'frozen',en,dlt%frozen(en),stt%frozen(en)
+        !dlt%variant_twin(en) = twin_var !- stt%variant_twin(en)                ! Achal LHS is real, RHS integer   ! why this equation?
 
       endif Success_Nucleation
 
@@ -503,30 +548,6 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
   end associate
 
 end subroutine plastic_kinematic_deltaFp
-
-!--------------------------------------------------------------------------------------------------
-!> @brief calculates (instantaneous) incremental change of microstructure
-!> Satya, Achal
-!--------------------------------------------------------------------------------------------------
-module subroutine plastic_phenopowerlaw_deltaState(ph,en)
-  implicit none
-  
-  integer, intent(in)::&
-    ph, &
-    en
-  
-  ! These are updated at every strain increment. What should these initilizations be?
-  
-  associate(dlt => deltastate(ph))
-  
-    dlt%f_twin(:,en)   = 0.0_pReal
-    dlt%fmc_twin(:,en) = 0.0_pReal
-    !dlt%variant_twin(en) = 0.0_pReal                                  
-    !dlt%frozen(en) = 0.0_pReal
-  
-  end associate
-  
-  end subroutine plastic_phenopowerlaw_deltaState
 
 !--------------------------------------------------------------------------------------------------
 !> @brief Write results to HDF5 output file.
@@ -559,6 +580,17 @@ module subroutine plastic_phenopowerlaw_result(ph,group)
           call result_writeDataset(stt%gamma_tw,group,trim(prm%output(ou)), &
                                    'twinning shear','1',prm%systems_tw)
 
+        case('f_twin')
+          call result_writeDataset(stt%f_twin,group,trim(prm%output(ou)), &
+                                   'volume fraction','1',prm%systems_tw)                          !Achal
+
+        case('variant_twin')
+          call result_writeDataset(stt%variant_twin,group,trim(prm%output(ou)), &
+                                    'twin variant','1')                                            !Achal
+
+        case('fbinary_twin')
+          call result_writeDataset(stt%frozen,group,trim(prm%output(ou)), &
+                                    'binary twin flag','1')                                       !Achal
       end select
 
     end do
@@ -643,14 +675,14 @@ pure subroutine kinetics_tw(Mp,ph,en,&
   integer :: i
 
 
-  associate(prm => param(ph), stt => state(ph))
+  associate(prm => param(ph), stt => state(ph), dlt => state(ph))
 
     tau_tw = [(math_tensordot(Mp,prm%P_tw(1:3,1:3,i)),i=1,prm%sum_N_tw)]
 
-    where(tau_tw > 0.0_pREAL .and. stt%frozen(en) < 0.9_pReal)                                      ! Achal
-      dot_gamma_tw = (1.0_pREAL-sum(stt%gamma_tw(:,en)/prm%gamma_char)) &                           ! only twin in untwinned volume fraction
-                   * prm%dot_gamma_0_tw*(tau_tw/stt%xi_tw(:,en))**prm%n_tw
-      fdot_twin = (0.05_pReal*(abs(tau_tw)/stt%xi_tw(:,en))**prm%n_tw)/prm%gamma_char               ! Achal 0.05 is a constant
+    where(tau_tw > 0.0_pREAL .and. stt%frozen(en) < 0.9_pReal)                                      ! Achal .and. stt%frozen(en) < 0.9_pReal
+      dot_gamma_tw = 0.0_pREAL !(1.0_pREAL-sum(stt%gamma_tw(:,en)/prm%gamma_char)) &                           ! only twin in untwinned volume fraction
+                   !* prm%dot_gamma_0_tw*(tau_tw/stt%xi_tw(:,en))**prm%n_tw
+      fdot_twin = (0.005_pReal*(abs(tau_tw)/stt%xi_tw(:,en))**prm%n_tw)/prm%gamma_char               ! Achal 0.005 is reference slip rate
     else where
       dot_gamma_tw = 0.0_pREAL
       fdot_twin = 0.0_pREAL
