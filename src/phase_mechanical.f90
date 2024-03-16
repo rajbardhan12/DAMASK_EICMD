@@ -110,12 +110,12 @@ submodule(phase) mechanical
         dLp_dFi                                                                                         !< derivative of Lp with respect to Fi
     end subroutine plastic_LpAndItsTangents
 
-    module subroutine plastic_KinematicJump(ph, en, Jump_occurr,deltaFp)
+    module subroutine plastic_KinematicJump(ph, en, twinJump,deltaFp)
       integer, intent(in) :: &
         ph, &
         en
       logical ,                     intent(out) :: &
-        Jump_occurr
+        twinJump
       real(pReal), dimension(3,3),  intent(out) :: &
         deltaFp
     end subroutine plastic_KinematicJump
@@ -1019,7 +1019,7 @@ module function phase_mechanical_constitutive(Delta_t,co,ce) result(status)
     formerStep
   integer :: &
     ph, en, sizeDotState, o, sd
-  logical :: todo, FpJumped
+  logical :: todo, twinJump
   real(pREAL) :: stepFrac,step
   real(pREAL), dimension(3,3) :: &
     Fp0, &
@@ -1052,24 +1052,25 @@ module function phase_mechanical_constitutive(Delta_t,co,ce) result(status)
   ! achal calling Kinematic DeltaFp here
   !** Starting to implement changes for accommodating large shear and reorientation caused by twinning**
   !if(.not. FpJumped .and. NiterationStressLp>1) then                !Achal: Reason for this if statement?
-    call plastic_KinematicJump(ph, en, FpJumped,deltaFp)
-    !if(FpJumped) write(6,*) 'element jumped', en 
-    !if(FpJumped) then
-      !Fp0 = matmul(deltaFp,phase_mechanical_Fp0(ph)%data(1:3,1:3,en))
+    call plastic_KinematicJump(ph, en, twinJump, deltaFp) 
+    if(twinJump) then
+      write(6,*) 'element jumped', deltaFp
+      write(6,*)'element',en
+      Fp0 = matmul(deltaFp,phase_mechanical_Fp0(ph)%data(1:3,1:3,en))
       
       o = plasticState(ph)%offsetDeltaState
       sd = plasticState(ph)%sizeDeltaState
       
       !update current state by jump
-      !plasticState(ph)%state(o+1:o+sd,en) = plasticState(ph)%state(o+1:o+sd,en) & 
-                                             !+ plasticState(ph)%deltaState(o+1:o+sd,en)
+      plasticState(ph)%state(o+1:o+sd,en) = plasticState(ph)%state(o+1:o+sd,en) & 
+                                             + plasticState(ph)%deltaState(o+1:o+sd,en)
       
       !store jumped state as initial value for next iteration
       !plasticState(ph)%state0(o+1:o+sd,en) = plasticState(ph)%state(o+1:o+sd,en)
 
       !store jumped state as initial value for for substate, partitioned state as well
 
-    !endif
+    endif
 
     if (status == STATUS_OK) then
       formerStep = step

@@ -473,20 +473,20 @@ end function plastic_active
 !3) -(last sampled volume fraction) to restart sampling
 !4) logical true if twinning possible/needed, false if not occurring/not needed
 !--------------------------------------------------------------------------------------------------
-subroutine plastic_KinematicJump(ph, en, Jump_occurr,deltaFp)
+subroutine plastic_KinematicJump(ph, en, twinJump,deltaFp)
 
   integer, intent(in) :: &
     ph, &
     en
   logical ,                     intent(out) :: &
-    Jump_occurr
+    twinJump
   real(pReal), dimension(3,3),  intent(out) :: &
     deltaFp
   
   plasticType: select case (mechanical_plasticity_type(ph))
 
     case (MECHANICAL_PLASTICITY_PHENOPOWERLAW) plasticType
-      call plastic_kinematic_deltaFp(ph,en, Jump_occurr,deltaFp)
+      call plastic_kinematic_deltaFp(ph,en, twinJump,deltaFp)
 
   end select plasticType
 

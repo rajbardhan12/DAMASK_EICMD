@@ -5,6 +5,22 @@
 !> @brief  phenomenological crystal plasticity formulation using a powerlaw fitting
 !--------------------------------------------------------------------------------------------------
 submodule(phase:plastic) phenopowerlaw
+  use geometry_plastic_nonlocal, only: &
+    nCellNeighbors  => geometry_plastic_nonlocal_nIPneighbors, &
+    IPneighborhood  => geometry_plastic_nonlocal_IPneighborhood, &
+    IPvolume0       => geometry_plastic_nonlocal_IPvolume0, &
+    IParea0         => geometry_plastic_nonlocal_IParea0, &
+    IPareaNormal0   => geometry_plastic_nonlocal_IPareaNormal0, &
+    geometry_plastic_nonlocal_disable
+
+  type :: tGeometry
+    real(pREAL), dimension(:), allocatable :: v_0
+    real(pREAL), dimension(:,:), allocatable :: a_0, x_0
+    real(pREAL), dimension(:,:,:), allocatable :: n_0
+    integer, dimension(:,:,:), allocatable :: IPneighborhood
+  end type tGeometry
+
+  type(tGeometry), dimension(:), allocatable :: geom
 
   type :: tParameters
     real(pREAL),               allocatable, dimension(:) :: &
@@ -114,6 +130,7 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
 
 
   phases => config_material%get_dict('phase')
+  allocate(geom(phases%length))
   allocate(param(phases%length))
   allocate(indexDotState(phases%length))
   allocate(state(phases%length))
@@ -271,6 +288,13 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
     call phase_allocateState(plasticState(ph),Nmembers,sizeState,sizeDotState,sizeDeltaState)
     deallocate(plasticState(ph)%dotState) ! ToDo: remove dotState completely
 
+    allocate(geom(ph)%v_0(Nmembers))
+    allocate(geom(ph)%a_0(nCellNeighbors,Nmembers))
+    allocate(geom(ph)%x_0(3,Nmembers))
+    allocate(geom(ph)%n_0(3,nCellNeighbors,Nmembers))
+    allocate(geom(ph)%IPneighborhood(3,nCellNeighbors,Nmembers))
+    call storeGeometry(ph)
+
 !--------------------------------------------------------------------------------------------------
 ! state aliases and initialization
     startIndex = 1
@@ -382,13 +406,13 @@ pure module subroutine phenopowerlaw_LpAndItsTangent(Lp,dLp_dMp,Mp,ph,en)
                          + ddot_gamma_dtau_sl(i) * prm%P_sl(k,l,i) * P_nS(m,n,i)
     end do slipSystems
 
-    call kinetics_tw(Mp,ph,en,dot_gamma_tw,fdot_twin, ddot_gamma_dtau_tw)
-    twinSystems: do i = 1, prm%sum_N_tw
-      Lp = Lp + dot_gamma_tw(i)*prm%P_tw(1:3,1:3,i)
-      forall (k=1:3,l=1:3,m=1:3,n=1:3) &
-        dLp_dMp(k,l,m,n) = dLp_dMp(k,l,m,n) &
-                         + ddot_gamma_dtau_tw(i)*prm%P_tw(k,l,i)*prm%P_tw(m,n,i)
-    end do twinSystems
+    !call kinetics_tw(Mp,ph,en,dot_gamma_tw,fdot_twin, ddot_gamma_dtau_tw)
+    !twinSystems: do i = 1, prm%sum_N_tw
+    !  Lp = Lp + dot_gamma_tw(i)*prm%P_tw(1:3,1:3,i)
+    !  forall (k=1:3,l=1:3,m=1:3,n=1:3) &
+    !    dLp_dMp(k,l,m,n) = dLp_dMp(k,l,m,n) &
+    !                     + ddot_gamma_dtau_tw(i)*prm%P_tw(k,l,i)*prm%P_tw(m,n,i)
+    !end do twinSystems
 
   end associate
 
@@ -471,16 +495,12 @@ module subroutine plastic_phenopowerlaw_deltaState(ph,en)
 
     twin_var = maxloc(stt%f_twin(:,en),dim=1)
 
-    !write(6,*)'twin_var',twin_var
-
     call plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
-      !write(6,*)'twinJump',twinJump
       if(twinJump) then
-        !write(6,*)'el',en
+        !write(6,*)'twinJump',en
         dlt%f_twin(:,en)     = 0.0_pReal - stt%f_twin(:,en)
         dlt%fmc_twin(:,en)   = 0.0_pReal - stt%fmc_twin(:,en)
         dlt%frozen(en)       = 1.0_pReal - stt%frozen(en)
-        write(6,*)'frozen',en,dlt%frozen(en),stt%frozen(en)
         dlt%variant_twin(en) = twin_var !- stt%variant_twin(en)
       endif
   
@@ -505,9 +525,9 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
   integer :: &
     n, &                                                                                            ! neighbor index
     neighbor_e, &                                                                                   ! element index of my neighbor
-    neighbor_i, &                                                                                   ! integration point index of my neighbor
-    neighbor_me, &
-    neighbor_phase
+    neighbor_ip, &                                                                                   ! integration point index of my neighbor
+    neighbor_en, &
+    neighbor_ph
 
   real(pREAL) :: &
     random, &
@@ -525,25 +545,48 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
   associate(prm => param(ph), stt => state(ph), dlt => deltastate(ph))
 
     twin_var = maxloc(stt%f_twin(:,en),dim=1)
+    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,1,512)
+    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,2,512)
+    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,3,512)
+    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,4,512)
+    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,5,512)
+    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,6,512)
+    !write(6,*) 'material_ID_phase', material_entry_phase(1,321)
+    !write(6,*) 'material_ID_phase', material_entry_phase(1,69)
+    !write(6,*) 'material_ID_phase', material_entry_phase(1,247)
+    !write(6,*) 'material_ID_phase', material_entry_phase(1,142)
+    !write(6,*) 'material_ID_phase', material_entry_phase(1,426)
+    !write(6,*) 'material_ID_phase', material_entry_phase(1,358)
+    !write(6,*) 'material_ID_phase', material_entry_phase(1,214)
+    !neighborloop1: do n = 1, ncellneighbors
+    !  neighbor_e  = geom(ph)%IPneighborhood(1,n,en)
+    !  neighbor_ip = geom(ph)%IPneighborhood(1,n,en)
+    !  neighbor_ph = material_ID_phase(1,(neighbor_e-1)*discretization_nIPs + neighbor_ip)
+    !  neighbor_en = material_entry_phase(1,(neighbor_e-1)*discretization_nIPs + neighbor_ip)
+      !write(6,*)'twinned neighbors', stt%variant_twin(neighbor_e) 
+    !end do neighborloop1
 
     call random_number(random)
 
-    Ability_Nucleation: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then
-      stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
-      Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then          ! Instead of sum take max
-        write(6,*)'element twinned',en,'random',random,'variant',twin_var,'volume fraction', stt%f_twin(twin_var,en)
-        twinJump = .true.
-        deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
-        !write(6,*) twinJump
-        !dlt%f_twin(:,en)     = 0.0_pReal - stt%f_twin(:,en)
-        !dlt%fmc_twin(:,en)   = 0.0_pReal - stt%fmc_twin(:,en)
-        !dlt%frozen(en)       = 1.0_pReal - stt%frozen(en)
-        !write(6,*)'frozen',en,dlt%frozen(en),stt%frozen(en)
-        !dlt%variant_twin(en) = twin_var !- stt%variant_twin(en)                ! Achal LHS is real, RHS integer   ! why this equation?
 
-      endif Success_Nucleation
+    do n = 1, ncellneighbors
+      neighbor_e = geom(ph)%IPneighborhood(1,n,en)
 
-    endif Ability_Nucleation
+      if (any(dNeq(phase_O_0(ph)%data(en)%asQuaternion(),phase_O_0(ph)%data(neighbor_e)%asQuaternion()))) then
+
+        Ability_Nucleation: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then
+          stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
+          Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then          
+            twinJump = .true.
+            deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
+            !write(6,*)'en',en
+            !write(6,*)twinJump
+          endif Success_Nucleation
+        endif Ability_Nucleation
+
+      endif
+
+    end do
 
   end associate
 
@@ -699,5 +742,38 @@ pure subroutine kinetics_tw(Mp,ph,en,&
   end associate
 
 end subroutine kinetics_tw
+
+!--------------------------------------------------------------------------------------------------
+!--------------------------------------------------------------------------------------------------
+subroutine storeGeometry(ph)
+
+  integer, intent(in) :: ph
+
+  integer :: ce, nCell
+  real(pREAL), dimension(:), allocatable :: v_0
+  real(pREAL), dimension(:,:), allocatable :: a_0, x_0
+  real(pREAL), dimension(:,:,:), allocatable :: n_0
+  integer, dimension(:,:,:), allocatable :: neighborhood
+
+
+  nCell = product(shape(IPVolume0))
+
+  v_0 = reshape(IPVolume0,[nCell])
+  a_0 = reshape(IPArea0,[nCellNeighbors,nCell])
+  x_0 = reshape(discretization_IPcoords,[3,nCell])
+  n_0 = reshape(IPAreaNormal0,[3,nCellNeighbors,nCell])
+  neighborhood = reshape(IPneighborhood,[3,nCellNeighbors,nCell])
+
+  do ce = 1, size(material_entry_homogenization,1)
+    if (material_ID_phase(1,ce) == ph) then
+      geom(ph)%v_0(material_entry_phase(1,ce)) = v_0(ce)
+      geom(ph)%a_0(:,material_entry_phase(1,ce)) = a_0(:,ce)
+      geom(ph)%x_0(:,material_entry_phase(1,ce)) = x_0(:,ce)
+      geom(ph)%n_0(:,:,material_entry_phase(1,ce)) = n_0(:,:,ce)
+      geom(ph)%IPneighborhood(:,:,material_entry_phase(1,ce)) = neighborhood(:,:,ce)
+    end if
+  end do
+
+end subroutine storeGeometry
 
 end submodule phenopowerlaw
