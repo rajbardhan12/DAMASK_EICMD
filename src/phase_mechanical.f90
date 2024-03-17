@@ -1054,8 +1054,8 @@ module function phase_mechanical_constitutive(Delta_t,co,ce) result(status)
   !if(.not. FpJumped .and. NiterationStressLp>1) then                !Achal: Reason for this if statement?
     call plastic_KinematicJump(ph, en, twinJump, deltaFp) 
     if(twinJump) then
-      write(6,*) 'element jumped', deltaFp
-      write(6,*)'element',en
+      write(6,*) 'delta', deltaFp
+      write(6,*)'element jumped',en
       Fp0 = matmul(deltaFp,phase_mechanical_Fp0(ph)%data(1:3,1:3,en))
       
       o = plasticState(ph)%offsetDeltaState

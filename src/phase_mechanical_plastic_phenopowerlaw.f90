@@ -533,7 +533,7 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
     random, &
     nRealNeighbors
   integer :: &
-    twin_var
+    twin_var, var_growth
   real(pREAL), dimension(param(ph)%sum_N_tw)  :: &
     fdot_twin
   real(pREAL), dimension(param(ph)%sum_N_tw)  :: &
@@ -587,6 +587,27 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
       endif
 
     end do
+
+    NeighborLoop: do n = 1, ncellneighbors
+      neighbor_e = geom(ph)%IPneighborhood(1,n,en)
+
+      if(stt%variant_twin(neighbor_e)>0) then
+        var_growth = stt%variant_twin(neighbor_e)
+        !write(6,*)'var_growth',var_growth,en
+        exit NeighborLoop
+      endif
+
+    enddo NeighborLoop
+
+    Growth_Criteria: if(var_growth>0) then
+      Ability_Growth: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then
+        stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
+        Success_Growth: if (random <= stt%f_twin(twin_var,en)) then
+          twinJump = .true.
+          deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
+        endif Success_Growth
+      endif Ability_Growth
+    endif Growth_Criteria
 
   end associate
 
