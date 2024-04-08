@@ -2160,9 +2160,12 @@ function crystal_CorrespondenceMatrix_twin(Ntwin,lattice,cOverA) result(Correspo
   !CorrespondenceMatrix(1:3,1:3,1) = math_axisAngleToR(coordinateSystem(1:3,2,6), 180.0_pReal*INRAD)                           ! delete this
 
   do i = 1, sum(Ntwin)
+    !write(6,*)'reindexation matrix',math_axisAngleToR(coordinateSystem(1:3,2,i), &
+    !180.0_pReal*INRAD)
     CorrespondenceMatrix(1:3,1:3,i) = matmul(math_axisAngleToR(coordinateSystem(1:3,2,i), &
                                       180.0_pReal*INRAD), MATH_I3 + characteristicShearTwin(i)* &
                                       SchmidMatrixTwin(1:3,1:3,i))
+    write(6,*)'correspondence matrix', CorrespondenceMatrix(1:3,1:3,i)
   enddo
 
 end function crystal_CorrespondenceMatrix_twin

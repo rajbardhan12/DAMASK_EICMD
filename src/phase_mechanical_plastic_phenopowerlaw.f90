@@ -39,7 +39,7 @@ submodule(phase:plastic) phenopowerlaw
       h_0_tw_sl, &                                                                                  !< reference hardening twin - slip
       h_0_tw_tw, &                                                                                  !< reference hardening twin - twin
       gamma_char, &                                                                                    !< characteristic shear for twins
-      checkstep
+      checkstep                                                                                     !< Achal < Checkstep for monte carlo
     real(pREAL),               allocatable, dimension(:,:) :: &
       h_sl_sl, &                                                                                    !< slip resistance from slip activity
       h_sl_tw, &                                                                                    !< slip resistance from twin activity
@@ -59,6 +59,8 @@ submodule(phase:plastic) phenopowerlaw
     character(len=:),          allocatable, dimension(:) :: &
       systems_sl, &
       systems_tw
+    logical,                   allocatable               :: &
+      discrete_twin
   end type tParameters
 
   type :: tIndexDotState
@@ -178,6 +180,7 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
                                                                         defaultVal=misc_ones(size(N_sl))), N_sl)
       prm%f_sat_sl_tw    = math_expand(pl%get_as1dReal('f_sat_sl-tw',   requiredSize=size(N_sl), &
                                                                         defaultVal=misc_zeros(size(N_sl))), N_sl)
+      prm%discrete_twin  = pl%get_asBool("discrete_twin", defaultval=.true.)
 
       prm%h_sl_sl = crystal_interaction_SlipBySlip(N_sl,pl%get_as1dReal('h_sl-sl'),phase_lattice(ph))
 
@@ -541,46 +544,28 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
   integer :: i
   twinJump = .false.
   deltaFp = math_I3
+  
+   
 
   associate(prm => param(ph), stt => state(ph), dlt => deltastate(ph))
 
     twin_var = maxloc(stt%f_twin(:,en),dim=1)
-    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,1,512)
-    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,2,512)
-    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,3,512)
-    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,4,512)
-    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,5,512)
-    !write(6,*) 'neighbor_el', geom(ph)%IPneighborhood(1,6,512)
-    !write(6,*) 'material_ID_phase', material_entry_phase(1,321)
-    !write(6,*) 'material_ID_phase', material_entry_phase(1,69)
-    !write(6,*) 'material_ID_phase', material_entry_phase(1,247)
-    !write(6,*) 'material_ID_phase', material_entry_phase(1,142)
-    !write(6,*) 'material_ID_phase', material_entry_phase(1,426)
-    !write(6,*) 'material_ID_phase', material_entry_phase(1,358)
-    !write(6,*) 'material_ID_phase', material_entry_phase(1,214)
-    !neighborloop1: do n = 1, ncellneighbors
-    !  neighbor_e  = geom(ph)%IPneighborhood(1,n,en)
-    !  neighbor_ip = geom(ph)%IPneighborhood(1,n,en)
-    !  neighbor_ph = material_ID_phase(1,(neighbor_e-1)*discretization_nIPs + neighbor_ip)
-    !  neighbor_en = material_entry_phase(1,(neighbor_e-1)*discretization_nIPs + neighbor_ip)
-      !write(6,*)'twinned neighbors', stt%variant_twin(neighbor_e) 
-    !end do neighborloop1
 
+    Discrete_twin: if ( prm%discrete_twin ) then
+    
     call random_number(random)
 
 
     do n = 1, ncellneighbors
-      neighbor_e = geom(ph)%IPneighborhood(1,n,en)
+      neighbor_e = geom(ph)%IPneighborhood(1,n,en)                                                                   !< Identify neighbor
 
-      if (any(dNeq(phase_O_0(ph)%data(en)%asQuaternion(),phase_O_0(ph)%data(neighbor_e)%asQuaternion()))) then
+      if (any(dNeq(phase_O_0(ph)%data(en)%asQuaternion(),phase_O_0(ph)%data(neighbor_e)%asQuaternion()))) then       !< Identify grain boundary elements
 
-        Ability_Nucleation: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then
+        Ability_Nucleation: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then     !< Frequency control
           stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
           Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then          
             twinJump = .true.
             deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
-            !write(6,*)'en',en
-            !write(6,*)twinJump
           endif Success_Nucleation
         endif Ability_Nucleation
 
@@ -591,26 +576,26 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
     NeighborLoop: do n = 1, ncellneighbors
       neighbor_e = geom(ph)%IPneighborhood(1,n,en)
 
-      if(stt%variant_twin(neighbor_e)>0) then
-        var_growth = stt%variant_twin(neighbor_e)
-        !write(6,*)'var_growth',var_growth,en
+      if(stt%variant_twin(neighbor_e)>0) then                                                   !< Check if neighbor is twinned
+        var_growth = stt%variant_twin(neighbor_e)                           
         exit NeighborLoop
       endif
 
     enddo NeighborLoop
 
-    Growth_Criteria: if(var_growth>0) then
-      Ability_Growth: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then
+    Growth_Criteria: if(var_growth>0) then                                                                    !< If neighbor twinned,
+      Ability_Growth: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then    !< Frequency control
         stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
-        Success_Growth: if (random <= stt%f_twin(twin_var,en)) then
-          twinJump = .true.
-          deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
+        Success_Growth: if (random <= stt%f_twin(twin_var,en)) then                                           !< Random sampling
+          twinJump = .true.                                                                                   !< Output flag
+          deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)                                                   !< Correspondence Matrix
         endif Success_Growth
       endif Ability_Growth
     endif Growth_Criteria
 
+    end if Discrete_twin
   end associate
-
+  
 end subroutine plastic_kinematic_deltaFp
 
 !--------------------------------------------------------------------------------------------------
