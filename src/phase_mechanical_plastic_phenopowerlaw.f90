@@ -339,7 +339,7 @@ module function plastic_phenopowerlaw_init() result(myPlasticity)
     startIndex =  endIndex + 1
     endIndex   =  endIndex + 1
     stt%frozen => plasticState(ph)%state(startIndex,:)
-    !stt%frozen = 0.0_pReal-1.0_pReal 
+    stt%frozen = 0.0_pReal-1.0_pReal
     dlt%frozen => plasticState(ph)%deltaState(startIndex-o,:)
     plasticState(ph)%atol(startIndex:endIndex) = pl%get_asReal('atol_gamma',defaultVal=1.0e-6_pReal)
   
@@ -409,13 +409,15 @@ pure module subroutine phenopowerlaw_LpAndItsTangent(Lp,dLp_dMp,Mp,ph,en)
                          + ddot_gamma_dtau_sl(i) * prm%P_sl(k,l,i) * P_nS(m,n,i)
     end do slipSystems
 
-    !call kinetics_tw(Mp,ph,en,dot_gamma_tw,fdot_twin, ddot_gamma_dtau_tw)
-    !twinSystems: do i = 1, prm%sum_N_tw
-    !  Lp = Lp + dot_gamma_tw(i)*prm%P_tw(1:3,1:3,i)
-    !  forall (k=1:3,l=1:3,m=1:3,n=1:3) &
-    !    dLp_dMp(k,l,m,n) = dLp_dMp(k,l,m,n) &
-    !                     + ddot_gamma_dtau_tw(i)*prm%P_tw(k,l,i)*prm%P_tw(m,n,i)
-    !end do twinSystems
+    Discrete_twin: if ( prm%discrete_twin ) then
+    call kinetics_tw(Mp,ph,en,dot_gamma_tw,fdot_twin, ddot_gamma_dtau_tw)
+    twinSystems: do i = 1, prm%sum_N_tw
+      Lp = Lp + dot_gamma_tw(i)*prm%P_tw(1:3,1:3,i)
+      forall (k=1:3,l=1:3,m=1:3,n=1:3) &
+        dLp_dMp(k,l,m,n) = dLp_dMp(k,l,m,n) &
+                           + ddot_gamma_dtau_tw(i)*prm%P_tw(k,l,i)*prm%P_tw(m,n,i)
+    end do twinSystems
+    endif Discrete_twin
 
   end associate
 
@@ -500,11 +502,11 @@ module subroutine plastic_phenopowerlaw_deltaState(ph,en)
 
     call plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
       if(twinJump) then
-        !write(6,*)'twinJump',en
         dlt%f_twin(:,en)     = 0.0_pReal - stt%f_twin(:,en)
         dlt%fmc_twin(:,en)   = 0.0_pReal - stt%fmc_twin(:,en)
         dlt%frozen(en)       = 1.0_pReal - stt%frozen(en)
-        dlt%variant_twin(en) = twin_var !- stt%variant_twin(en)
+        dlt%variant_twin(en) = twin_var !- stt%variant_twin(en
+
       endif
   
   end associate
@@ -552,8 +554,11 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
     twin_var = maxloc(stt%f_twin(:,en),dim=1)
 
     Discrete_twin: if ( prm%discrete_twin ) then
+
+    Frozen: if(stt%frozen(en)<2.0_pREAL) then
     
     call random_number(random)
+    
 
 
     do n = 1, ncellneighbors
@@ -563,9 +568,11 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
 
         Ability_Nucleation: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then     !< Frequency control
           stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
-          Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then          
+          Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then 
+            write(6,*)'frozen',stt%frozen(en)         
             twinJump = .true.
             deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
+            exit
           endif Success_Nucleation
         endif Ability_Nucleation
 
@@ -583,15 +590,18 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
 
     enddo NeighborLoop
 
-    Growth_Criteria: if(var_growth>0) then                                                                    !< If neighbor twinned,
-      Ability_Growth: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then    !< Frequency control
-        stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
-        Success_Growth: if (random <= stt%f_twin(twin_var,en)) then                                           !< Random sampling
-          twinJump = .true.                                                                                   !< Output flag
-          deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)                                                   !< Correspondence Matrix
-        endif Success_Growth
-      endif Ability_Growth
-    endif Growth_Criteria
+    !Growth_Criteria: if(var_growth>100000.0_pReal) then                                                                    !< If neighbor twinned,
+    !  Ability_Growth: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then    !< Frequency control
+    !    stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
+    !    Success_Growth: if (random <= stt%f_twin(twin_var,en)) then                                           !< Random sampling
+    !      write(6,*)'frozen1',stt%frozen(en)
+    !      twinJump = .true.                                                                                   !< Output flag
+    !      deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)                                                   !< Correspondence Matrix
+    !    endif Success_Growth
+    !  endif Ability_Growth
+    !endif Growth_Criteria
+    
+    endif Frozen
 
     end if Discrete_twin
   end associate
@@ -727,15 +737,29 @@ pure subroutine kinetics_tw(Mp,ph,en,&
   associate(prm => param(ph), stt => state(ph), dlt => state(ph))
 
     tau_tw = [(math_tensordot(Mp,prm%P_tw(1:3,1:3,i)),i=1,prm%sum_N_tw)]
+    
+    Discrete_twin: if ( prm%discrete_twin ) then
 
     where(tau_tw > 0.0_pREAL .and. stt%frozen(en) < 0.9_pReal)                                      ! Achal .and. stt%frozen(en) < 0.9_pReal
-      dot_gamma_tw = 0.0_pREAL !(1.0_pREAL-sum(stt%gamma_tw(:,en)/prm%gamma_char)) &                           ! only twin in untwinned volume fraction
-                   !* prm%dot_gamma_0_tw*(tau_tw/stt%xi_tw(:,en))**prm%n_tw
+      dot_gamma_tw = 0.0_pREAL                                                                      ! only twin in untwinned volume fraction
       fdot_twin = (0.005_pReal*(abs(tau_tw)/stt%xi_tw(:,en))**prm%n_tw)/prm%gamma_char               ! Achal 0.005 is reference slip rate
     else where
       dot_gamma_tw = 0.0_pREAL
       fdot_twin = 0.0_pREAL
     end where
+
+    else
+      where(tau_tw > 0.0_pREAL)                                                                     ! Achal Unchanged model 
+      dot_gamma_tw = (1.0_pREAL-sum(stt%gamma_tw(:,en)/prm%gamma_char)) &                           ! only twin in untwinned volume fraction
+                   * prm%dot_gamma_0_tw*(tau_tw/stt%xi_tw(:,en))**prm%n_tw
+      fdot_twin = 0.0_pREAL                                                                         ! Achal Unchanged model
+      else where
+      dot_gamma_tw = 0.0_pREAL
+      fdot_twin = 0.0_pREAL
+      end where
+      
+    end if Discrete_twin
+
 
     if (present(ddot_gamma_dtau_tw)) then
       where(dNeq0(dot_gamma_tw))
