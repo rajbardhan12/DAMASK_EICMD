@@ -409,7 +409,7 @@ pure module subroutine phenopowerlaw_LpAndItsTangent(Lp,dLp_dMp,Mp,ph,en)
                          + ddot_gamma_dtau_sl(i) * prm%P_sl(k,l,i) * P_nS(m,n,i)
     end do slipSystems
 
-    Discrete_twin: if ( prm%discrete_twin ) then
+    Discrete_twin: if ( .not. prm%discrete_twin ) then
     call kinetics_tw(Mp,ph,en,dot_gamma_tw,fdot_twin, ddot_gamma_dtau_tw)
     twinSystems: do i = 1, prm%sum_N_tw
       Lp = Lp + dot_gamma_tw(i)*prm%P_tw(1:3,1:3,i)
@@ -505,7 +505,13 @@ module subroutine plastic_phenopowerlaw_deltaState(ph,en)
         dlt%f_twin(:,en)     = 0.0_pReal - stt%f_twin(:,en)
         dlt%fmc_twin(:,en)   = 0.0_pReal - stt%fmc_twin(:,en)
         dlt%frozen(en)       = 1.0_pReal - stt%frozen(en)
-        dlt%variant_twin(en) = twin_var !- stt%variant_twin(en
+        dlt%variant_twin(en) = twin_var !- stt%variant_twin(en)
+
+      else
+        dlt%f_twin(:,en)     = 0.0_pReal
+        dlt%fmc_twin(:,en)   = 0.0_pReal
+        dlt%frozen(en)       = 0.0_pReal
+        dlt%variant_twin(en) = 0.0_pREAL
 
       endif
   
@@ -535,7 +541,7 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
     neighbor_ph
 
   real(pREAL) :: &
-    random, &
+    random, random_g, &
     nRealNeighbors
   integer :: &
     twin_var, var_growth
@@ -555,9 +561,10 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
 
     Discrete_twin: if ( prm%discrete_twin ) then
 
-    Frozen: if(stt%frozen(en)<2.0_pREAL) then
+    Frozen: if(stt%frozen(en)<1.0_pREAL) then
     
     call random_number(random)
+    call random_number(random_g)
     
 
 
@@ -568,8 +575,7 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
 
         Ability_Nucleation: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then     !< Frequency control
           stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
-          Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then 
-            write(6,*)'frozen',stt%frozen(en)         
+          Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then          
             twinJump = .true.
             deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
             exit
@@ -584,17 +590,21 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
       neighbor_e = geom(ph)%IPneighborhood(1,n,en)
 
       if(stt%variant_twin(neighbor_e)>0) then                                                   !< Check if neighbor is twinned
-        var_growth = stt%variant_twin(neighbor_e)                           
+        var_growth = stt%variant_twin(neighbor_e)
+        Success_Growth: if (0.3_pREAL+random_g*0.7_pREAL <= stt%f_twin(twin_var,en)) then
+          twinJump = .true.
+          deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
+        endif Success_Growth
         exit NeighborLoop
       endif
 
     enddo NeighborLoop
 
-    !Growth_Criteria: if(var_growth>100000.0_pReal) then                                                                    !< If neighbor twinned,
+    !Growth_Criteria: if(var_growth>0.0_pReal) then                                                            !< If neighbor twinned,
     !  Ability_Growth: if(stt%f_twin(twin_var,en)>(stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var))) then    !< Frequency control
     !    stt%fmc_twin(twin_var,en) = stt%fmc_twin(twin_var,en)+prm%checkstep(twin_var)
-    !    Success_Growth: if (random <= stt%f_twin(twin_var,en)) then                                           !< Random sampling
-    !      write(6,*)'frozen1',stt%frozen(en)
+    !    Success_Growth: if (0.3_pREAL+random_g*0.7_pREAL <= stt%f_twin(twin_var,en)) then                                           !< Random sampling
+          !write(6,*)'frozen1',stt%frozen(en)
     !      twinJump = .true.                                                                                   !< Output flag
     !      deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)                                                   !< Correspondence Matrix
     !    endif Success_Growth
@@ -695,6 +705,7 @@ pure subroutine kinetics_sl(Mp,ph,en, &
                  * prm%dot_gamma_0_sl  &
                  * (max(tau_sl_pos,tau_sl_neg)/stt%xi_sl(:,en))**prm%n_sl
 
+    if(stt%frozen(en) < 0.9_pReal) then
     if (present(ddot_gamma_dtau_sl)) then
       where(dNeq0(dot_gamma_sl))
         ddot_gamma_dtau_sl = dot_gamma_sl*prm%n_sl/max(tau_sl_pos,tau_sl_neg)
@@ -702,7 +713,7 @@ pure subroutine kinetics_sl(Mp,ph,en, &
         ddot_gamma_dtau_sl = 0.0_pREAL
       end where
     end if
-
+    end if
   end associate
 
 end subroutine kinetics_sl

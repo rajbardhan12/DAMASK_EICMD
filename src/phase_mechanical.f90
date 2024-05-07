@@ -1063,11 +1063,11 @@ module function phase_mechanical_constitutive(Delta_t,co,ce) result(status)
       sd = plasticState(ph)%sizeDeltaState
       
       !update current state by jump
-      plasticState(ph)%state(o+1:o+sd,en) = plasticState(ph)%state(o+1:o+sd,en) & 
-                                             + plasticState(ph)%deltaState(o+1:o+sd,en)
+      !plasticState(ph)%state(o+1:o+sd,en) = plasticState(ph)%state(o+1:o+sd,en) & 
+      !                                       + plasticState(ph)%deltaState(o+1:o+sd,en)
       
       !store jumped state as initial value for next iteration
-      !plasticState(ph)%state0(o+1:o+sd,en) = plasticState(ph)%state(o+1:o+sd,en)
+      !state0(o+1:o+sd) = plasticState(ph)%state(o+1:o+sd,en)
 
       !store jumped state as initial value for for substate, partitioned state as well
 
