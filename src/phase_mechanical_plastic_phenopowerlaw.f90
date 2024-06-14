@@ -568,7 +568,7 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
     
 
 
-    do n = 1, ncellneighbors
+    do n = 1,       
       neighbor_e = geom(ph)%IPneighborhood(1,n,en)                                                                   !< Identify neighbor
 
       if (any(dNeq(phase_O_0(ph)%data(en)%asQuaternion(),phase_O_0(ph)%data(neighbor_e)%asQuaternion()))) then       !< Identify grain boundary elements
@@ -578,6 +578,7 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
           Success_Nucleation: if (random <= stt%f_twin(twin_var,en)) then          
             twinJump = .true.
             deltaFp  = prm%CorrespondenceMatrix(:,:,twin_var)
+            write(6,*)'elememt', en ! rajbardhan 
             exit
           endif Success_Nucleation
         endif Ability_Nucleation
