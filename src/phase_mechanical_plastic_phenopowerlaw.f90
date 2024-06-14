@@ -568,7 +568,7 @@ module subroutine plastic_kinematic_deltaFp(ph,en,twinJump,deltaFp)
     
 
 
-    do n = 1,       
+    do n = 1    
       neighbor_e = geom(ph)%IPneighborhood(1,n,en)                                                                   !< Identify neighbor
 
       if (any(dNeq(phase_O_0(ph)%data(en)%asQuaternion(),phase_O_0(ph)%data(neighbor_e)%asQuaternion()))) then       !< Identify grain boundary elements
